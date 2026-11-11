@@ -30,7 +30,16 @@ class _HomeShellState extends State<HomeShell> {
 
   @override
   Widget build(BuildContext context) {
-    // 1. Show Epic Animated Splash & Intro Screen on launch
+    // 1. If an alarm is actively ringing, show the full-screen interactive challenge immediately!
+    if (widget.appState.activeRingingAlarm != null) {
+      _showSplashIntro = false;
+      return AlarmRingingScreen(
+        alarm: widget.appState.activeRingingAlarm!,
+        appState: widget.appState,
+      );
+    }
+
+    // 2. Show Epic Animated Splash & Intro Screen on launch
     if (_showSplashIntro) {
       return EpicSplashScreen(
         onFinish: () {
@@ -38,14 +47,6 @@ class _HomeShellState extends State<HomeShell> {
             _showSplashIntro = false;
           });
         },
-      );
-    }
-
-    // 2. If an alarm is actively ringing, show the full-screen interactive challenge!
-    if (widget.appState.activeRingingAlarm != null) {
-      return AlarmRingingScreen(
-        alarm: widget.appState.activeRingingAlarm!,
-        appState: widget.appState,
       );
     }
 

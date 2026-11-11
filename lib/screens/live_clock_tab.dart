@@ -335,6 +335,11 @@ class _LiveClockTabState extends State<LiveClockTab>
 
         const SizedBox(height: 20),
 
+        // Background Guardian & 10-Second Outside-App Test Card
+        _buildBackgroundGuardianCard(context, isDark),
+
+        const SizedBox(height: 20),
+
         // Quick Power Nap Section (قيلولة الطاقة السريعة)
         _buildSectionTitle(
           isDark: isDark,
@@ -443,6 +448,172 @@ class _LiveClockTabState extends State<LiveClockTab>
       return 'يرن بعد $mins دقيقة من الآن';
     }
     return 'يرن بعد $hours ساعة و $mins دقيقة';
+  }
+
+  Widget _buildBackgroundGuardianCard(BuildContext context, bool isDark) {
+    final countdown = widget.appState.backgroundTestCountdown;
+    final guardianOn = widget.appState.backgroundGuardianEnabled;
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: isDark ? SamyColors.darkSurface : SamyColors.lightSurface,
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(
+          color: countdown > 0
+              ? SamyColors.warningAmber
+              : (guardianOn
+                  ? SamyColors.successGreen.withValues(alpha: 0.55)
+                  : (isDark
+                      ? SamyColors.darkCardBorder
+                      : SamyColors.lightCardBorder)),
+          width: 1.5,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(9),
+                decoration: BoxDecoration(
+                  color: (guardianOn
+                          ? SamyColors.successGreen
+                          : SamyColors.primaryBlue)
+                      .withValues(alpha: 0.16),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(
+                  Icons.shield_rounded,
+                  color: guardianOn
+                      ? SamyColors.successGreen
+                      : SamyColors.primaryBlue,
+                  size: 22,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Text(
+                          'الرنين في الخلفية وشاشة القفل',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w900,
+                            fontSize: 14.5,
+                            color: isDark
+                                ? Colors.white
+                                : SamyColors.lightTextPrimary,
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 8, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: (guardianOn
+                                    ? SamyColors.successGreen
+                                    : Colors.grey)
+                                .withValues(alpha: 0.2),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Text(
+                            guardianOn ? 'نشط الآن 🟢' : 'متوقف',
+                            style: TextStyle(
+                              fontSize: 10.5,
+                              fontWeight: FontWeight.w900,
+                              color: guardianOn
+                                  ? SamyColors.successGreen
+                                  : Colors.grey,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    Text(
+                      'يبقي محرك الصوت والإشعارات يعمل في الخلفية حتى لو خرجت من التطبيق أو قفلت شاشة الآيفون',
+                      style: TextStyle(
+                        fontSize: 11.5,
+                        color: isDark
+                            ? SamyColors.darkTextSecondary
+                            : SamyColors.lightTextSecondary,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Switch.adaptive(
+                value: guardianOn,
+                activeTrackColor: SamyColors.successGreen,
+                onChanged: (v) => widget.appState.toggleBackgroundGuardian(v),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton.icon(
+              onPressed: () {
+                if (countdown > 0) {
+                  widget.appState.cancelTenSecondBackgroundTest();
+                } else {
+                  widget.appState.startTenSecondBackgroundTest();
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      backgroundColor: SamyColors.primaryBlue,
+                      duration: const Duration(seconds: 6),
+                      behavior: SnackBarBehavior.floating,
+                      content: const Text(
+                        '⏱️ بدأ العد التنازلي! اخرج من البرنامج الآن أو صغّر النافذة.. سيرن المنبه في الخلفية بعد ١٠ ثوانٍ!',
+                        style: TextStyle(fontWeight: FontWeight.w800),
+                      ),
+                    ),
+                  );
+                }
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: countdown > 0
+                    ? SamyColors.warningAmber
+                    : SamyColors.primaryBlue.withValues(alpha: 0.18),
+                foregroundColor: countdown > 0
+                    ? const Color(0xFF041028)
+                    : (isDark
+                        ? SamyColors.electricCyan
+                        : SamyColors.primaryBlue),
+                elevation: 0,
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14),
+                  side: BorderSide(
+                    color: countdown > 0
+                        ? SamyColors.warningAmber
+                        : SamyColors.electricCyan.withValues(alpha: 0.45),
+                  ),
+                ),
+              ),
+              icon: Icon(
+                countdown > 0
+                    ? Icons.timer_rounded
+                    : Icons.notifications_active_rounded,
+                size: 19,
+              ),
+              label: Text(
+                countdown > 0
+                    ? 'اخرج من البرنامج الآن! سيرن بعد $countdown ثوانٍ... (اضغط للإلغاء)'
+                    : 'اختبار الرنين في الخلفية (يرن بعد ١٠ ثوانٍ وأنت خارج التطبيق) 🛡️',
+                style: const TextStyle(
+                  fontWeight: FontWeight.w900,
+                  fontSize: 12.5,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   Widget _buildMiniStatBadge({

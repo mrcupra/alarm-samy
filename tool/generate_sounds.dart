@@ -144,6 +144,12 @@ void main() async {
       'loops': 1,
       'siren': false,
     },
+    'samy_keepalive': {
+      'freqs': [30.0, 30.0, 30.0, 30.0],
+      'ms': 500,
+      'loops': 2,
+      'siren': false,
+    },
   };
 
   for (final entry in tones.entries) {

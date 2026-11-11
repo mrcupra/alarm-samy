@@ -3,22 +3,26 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/alarm_models.dart';
+import 'notification_service.dart';
 import 'sound_generator_service.dart';
 
-class AppState extends ChangeNotifier {
-  bool _isDarkMode = true; // Default to the sleek Royal Dark Blue mode
+class AppState extends ChangeNotifier with WidgetsBindingObserver {
+  bool _isDarkMode = true;
   bool _isPro = false;
   String _proPlanTitle = 'النسخة المجانية';
   int _wakeStreakDays = 7;
   int _completedChallengesCount = 24;
+  bool _backgroundGuardianEnabled = true;
 
   List<AlarmItem> _alarms = [];
   List<ReminderItem> _reminders = [];
   List<RingtoneItem> _customRingtones = [];
 
   AlarmItem? _activeRingingAlarm;
-  String? _lastTriggeredMinuteKey;
+  final Map<String, String> _triggeredAlarmMinuteMap = {};
   Timer? _clockTimer;
+  Timer? _backgroundTestTimer;
+  int _backgroundTestCountdown = 0;
   DateTime _now = DateTime.now();
 
   bool get isDarkMode => _isDarkMode;
@@ -26,6 +30,8 @@ class AppState extends ChangeNotifier {
   String get proPlanTitle => _proPlanTitle;
   int get wakeStreakDays => _wakeStreakDays;
   int get completedChallengesCount => _completedChallengesCount;
+  bool get backgroundGuardianEnabled => _backgroundGuardianEnabled;
+  int get backgroundTestCountdown => _backgroundTestCountdown;
   DateTime get now => _now;
   AlarmItem? get activeRingingAlarm => _activeRingingAlarm;
 
@@ -127,12 +133,16 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> initialize() async {
+    WidgetsBinding.instance.addObserver(this);
+
     final prefs = await SharedPreferences.getInstance();
     _isDarkMode = prefs.getBool('samy_dark_mode') ?? true;
     _isPro = prefs.getBool('samy_is_pro') ?? false;
     _proPlanTitle = prefs.getString('samy_pro_plan') ?? 'النسخة المجانية';
     _wakeStreakDays = prefs.getInt('samy_streak') ?? 7;
     _completedChallengesCount = prefs.getInt('samy_challenges_solved') ?? 24;
+    _backgroundGuardianEnabled =
+        prefs.getBool('samy_bg_guardian') ?? true;
 
     // Load alarms
     final alarmsJson = prefs.getStringList('samy_alarms');
@@ -229,7 +239,88 @@ class AppState extends ChangeNotifier {
           .toList();
     }
 
+    unawaited(
+      NotificationService().initialize(
+        onTap: (payload) {
+          if (payload != null) {
+            final match = _alarms.where((a) => a.id == payload).toList();
+            if (match.isNotEmpty) {
+              triggerAlarmNow(match.first);
+            } else if (_alarms.isNotEmpty) {
+              triggerAlarmNow(_alarms.first);
+            }
+          }
+        },
+      ).then((_) => _syncBackgroundServices()),
+    );
+
     _startClockTicker();
+    notifyListeners();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive) {
+      // Ensure background audio keep-alive and OS notifications are armed when leaving app
+      _syncBackgroundServices();
+    } else if (state == AppLifecycleState.resumed) {
+      _now = DateTime.now();
+      _checkScheduledAlarms();
+      notifyListeners();
+    }
+  }
+
+  Future<void> _syncBackgroundServices() async {
+    final hasActiveAlarms =
+        _backgroundGuardianEnabled && _alarms.any((a) => a.isEnabled);
+    await SoundGeneratorService().syncBackgroundKeepAlive(hasActiveAlarms);
+    await NotificationService().syncScheduledAlarms(_alarms);
+  }
+
+  Future<void> toggleBackgroundGuardian(bool enabled) async {
+    _backgroundGuardianEnabled = enabled;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('samy_bg_guardian', enabled);
+    await _syncBackgroundServices();
+  }
+
+  /// Starts a 10-second countdown so the user can exit/minimize the app and test background ringing!
+  void startTenSecondBackgroundTest() {
+    _backgroundTestTimer?.cancel();
+    _backgroundTestCountdown = 10;
+    SoundGeneratorService().syncBackgroundKeepAlive(true);
+    notifyListeners();
+
+    _backgroundTestTimer =
+        Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (_backgroundTestCountdown > 1) {
+        _backgroundTestCountdown--;
+        notifyListeners();
+      } else {
+        timer.cancel();
+        _backgroundTestCountdown = 0;
+        final testAlarm = _alarms.isNotEmpty
+            ? _alarms.first
+            : const AlarmItem(
+                id: 'bg_test_alarm',
+                hour: 7,
+                minute: 0,
+                label: 'اختبار الرنين في الخلفية بنجاح 🚀',
+                challengeType: WakeChallengeType.math,
+                difficulty: ChallengeDifficulty.medium,
+                questionCount: 2,
+                ringtoneId: 'samy_thunder',
+              );
+        triggerAlarmNow(testAlarm);
+      }
+    });
+  }
+
+  void cancelTenSecondBackgroundTest() {
+    _backgroundTestTimer?.cancel();
+    _backgroundTestCountdown = 0;
     notifyListeners();
   }
 
@@ -246,14 +337,14 @@ class AppState extends ChangeNotifier {
     if (_activeRingingAlarm != null) return;
     final minuteKey =
         '${_now.year}-${_now.month}-${_now.day}-${_now.hour}:${_now.minute}';
-    if (_lastTriggeredMinuteKey == minuteKey) return;
 
-    if (_now.second <= 2) {
-      for (final alarm in _alarms) {
-        if (alarm.isEnabled &&
-            alarm.hour == _now.hour &&
-            alarm.minute == _now.minute) {
-          _lastTriggeredMinuteKey = minuteKey;
+    // Check across the entire minute (0..59s) so background timer coalescing never misses!
+    for (final alarm in _alarms) {
+      if (alarm.isEnabled &&
+          alarm.hour == _now.hour &&
+          alarm.minute == _now.minute) {
+        if (_triggeredAlarmMinuteMap[alarm.id] != minuteKey) {
+          _triggeredAlarmMinuteMap[alarm.id] = minuteKey;
           triggerAlarmNow(alarm);
           break;
         }
@@ -294,23 +385,30 @@ class AppState extends ChangeNotifier {
     } else {
       _alarms.insert(0, alarm);
     }
+    // Clear any previous trigger lock for this alarm ID so newly edited time can ring immediately
+    _triggeredAlarmMinuteMap.remove(alarm.id);
     notifyListeners();
     await _saveAlarms();
+    await _syncBackgroundServices();
   }
 
   Future<void> toggleAlarm(String id) async {
     final idx = _alarms.indexWhere((a) => a.id == id);
     if (idx >= 0) {
       _alarms[idx] = _alarms[idx].copyWith(isEnabled: !_alarms[idx].isEnabled);
+      _triggeredAlarmMinuteMap.remove(id);
       notifyListeners();
       await _saveAlarms();
+      await _syncBackgroundServices();
     }
   }
 
   Future<void> deleteAlarm(String id) async {
     _alarms.removeWhere((a) => a.id == id);
+    _triggeredAlarmMinuteMap.remove(id);
     notifyListeners();
     await _saveAlarms();
+    await _syncBackgroundServices();
   }
 
   Future<void> createQuickNapAlarm(int minutesFromNow) async {
@@ -330,12 +428,14 @@ class AppState extends ChangeNotifier {
     _alarms.insert(0, napAlarm);
     notifyListeners();
     await _saveAlarms();
+    await _syncBackgroundServices();
   }
 
   void triggerAlarmNow(AlarmItem alarm) {
     _activeRingingAlarm = alarm;
     final ringtone = getRingtoneById(alarm.ringtoneId);
     SoundGeneratorService().playRingtone(ringtone, loop: true);
+    NotificationService().showAlarmRingingNotification(alarm);
     notifyListeners();
   }
 
@@ -347,6 +447,7 @@ class AppState extends ChangeNotifier {
     notifyListeners();
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt('samy_challenges_solved', _completedChallengesCount);
+    await _syncBackgroundServices();
   }
 
   Future<void> snoozeActiveAlarm() async {
@@ -366,6 +467,7 @@ class AppState extends ChangeNotifier {
       );
       _alarms.insert(0, snoozeAlarm);
       await _saveAlarms();
+      await _syncBackgroundServices();
     }
     notifyListeners();
   }
@@ -435,7 +537,9 @@ class AppState extends ChangeNotifier {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _clockTimer?.cancel();
+    _backgroundTestTimer?.cancel();
     super.dispose();
   }
 }

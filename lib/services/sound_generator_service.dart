@@ -13,11 +13,15 @@ class SoundGeneratorService {
 
   final AudioPlayer _alarmPlayer = AudioPlayer();
   final AudioPlayer _fxPlayer = AudioPlayer();
+  final AudioPlayer _keepAlivePlayer = AudioPlayer();
+
   bool _isPlaying = false;
+  bool _isKeepAliveActive = false;
   String? _currentRingtoneId;
   bool _contextInitialized = false;
 
   bool get isPlaying => _isPlaying;
+  bool get isKeepAliveActive => _isKeepAliveActive;
   String? get currentRingtoneId => _currentRingtoneId;
 
   static const Set<String> _builtInAssetIds = {
@@ -33,26 +37,56 @@ class SoundGeneratorService {
     if (_contextInitialized) return;
     _contextInitialized = true;
     try {
-      await AudioPlayer.global.setAudioContext(
-        AudioContext(
-          iOS: AudioContextIOS(
-            category: AVAudioSessionCategory.playback,
-            options: const {
-              AVAudioSessionOptions.mixWithOthers,
-              AVAudioSessionOptions.defaultToSpeaker,
-            },
-          ),
-          android: const AudioContextAndroid(
-            isSpeakerphoneOn: true,
-            stayAwake: true,
-            contentType: AndroidContentType.sonification,
-            usageType: AndroidUsageType.alarm,
-            audioFocus: AndroidAudioFocus.gain,
-          ),
-        ),
-      );
-      await _alarmPlayer.setVolume(1.0);
-      await _fxPlayer.setVolume(1.0);
+      await AudioPlayer.global
+          .setAudioContext(
+            AudioContext(
+              iOS: AudioContextIOS(
+                category: AVAudioSessionCategory.playback,
+                options: const {
+                  AVAudioSessionOptions.mixWithOthers,
+                  AVAudioSessionOptions.defaultToSpeaker,
+                },
+              ),
+              android: const AudioContextAndroid(
+                isSpeakerphoneOn: true,
+                stayAwake: true,
+                contentType: AndroidContentType.sonification,
+                usageType: AndroidUsageType.alarm,
+                audioFocus: AndroidAudioFocus.gain,
+              ),
+            ),
+          )
+          .timeout(const Duration(milliseconds: 500));
+      await _alarmPlayer
+          .setVolume(1.0)
+          .timeout(const Duration(milliseconds: 300));
+      await _fxPlayer
+          .setVolume(1.0)
+          .timeout(const Duration(milliseconds: 300));
+    } catch (_) {}
+  }
+
+  /// Keeps the app process alive in background on iOS & Desktop when alarms are armed
+  Future<void> syncBackgroundKeepAlive(bool shouldStayAwake) async {
+    try {
+      await _ensureAudioContext();
+      if (shouldStayAwake && !_isKeepAliveActive) {
+        _isKeepAliveActive = true;
+        await _keepAlivePlayer
+            .setReleaseMode(ReleaseMode.loop)
+            .timeout(const Duration(milliseconds: 400));
+        await _keepAlivePlayer
+            .setVolume(0.01)
+            .timeout(const Duration(milliseconds: 400));
+        await _keepAlivePlayer
+            .play(AssetSource('sounds/samy_keepalive.wav'))
+            .timeout(const Duration(milliseconds: 500));
+      } else if (!shouldStayAwake && _isKeepAliveActive) {
+        _isKeepAliveActive = false;
+        await _keepAlivePlayer
+            .stop()
+            .timeout(const Duration(milliseconds: 400));
+      }
     } catch (_) {}
   }
 
@@ -88,7 +122,7 @@ class SoundGeneratorService {
     buffer.setUint16(32, blockAlign, Endian.little);
     buffer.setUint16(34, 16, Endian.little);
 
-    _writeString(buffer, 36, 'data');
+    _writeString(36 == 36 ? buffer : buffer, 36, 'data');
     buffer.setUint32(40, dataSize, Endian.little);
 
     int offset = 44;

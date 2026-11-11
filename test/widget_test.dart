@@ -14,7 +14,7 @@ void main() {
     expect(find.text('ALARM SAMY'), findsOneWidget);
 
     await tester.tap(find.text('تخطي للدخول ⬅'));
-    await tester.pump();
+    await tester.pump(const Duration(seconds: 3));
     expect(find.text('Alarm Samy'), findsOneWidget);
 
     appState.dispose();

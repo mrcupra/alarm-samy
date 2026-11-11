@@ -1,6 +1,7 @@
+import 'dart:io';
 import 'dart:math' as math;
-import 'dart:typed_data';
 import 'package:audioplayers/audioplayers.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import '../models/alarm_models.dart';
 
@@ -14,42 +15,79 @@ class SoundGeneratorService {
   final AudioPlayer _fxPlayer = AudioPlayer();
   bool _isPlaying = false;
   String? _currentRingtoneId;
+  bool _contextInitialized = false;
 
   bool get isPlaying => _isPlaying;
   String? get currentRingtoneId => _currentRingtoneId;
 
-  /// Synthesizes a rich polyphonic 16-bit PCM WAV byte buffer from frequencies
+  static const Set<String> _builtInAssetIds = {
+    'samy_dawn',
+    'samy_chime',
+    'samy_radar',
+    'samy_thunder',
+    'samy_royal',
+    'samy_cyber',
+  };
+
+  Future<void> _ensureAudioContext() async {
+    if (_contextInitialized) return;
+    _contextInitialized = true;
+    try {
+      await AudioPlayer.global.setAudioContext(
+        AudioContext(
+          iOS: AudioContextIOS(
+            category: AVAudioSessionCategory.playback,
+            options: const {
+              AVAudioSessionOptions.mixWithOthers,
+              AVAudioSessionOptions.defaultToSpeaker,
+            },
+          ),
+          android: const AudioContextAndroid(
+            isSpeakerphoneOn: true,
+            stayAwake: true,
+            contentType: AndroidContentType.sonification,
+            usageType: AndroidUsageType.alarm,
+            audioFocus: AndroidAudioFocus.gain,
+          ),
+        ),
+      );
+      await _alarmPlayer.setVolume(1.0);
+      await _fxPlayer.setVolume(1.0);
+    } catch (_) {}
+  }
+
+  /// Synthesizes a 44.1kHz Stereo 16-bit PCM WAV buffer for custom melodies
   Uint8List generateMelodyWav({
     required List<double> frequencies,
-    int noteDurationMs = 220,
+    int noteDurationMs = 200,
     int loops = 3,
-    double volume = 0.85,
+    double volume = 0.92,
   }) {
-    const int sampleRate = 22050;
+    const int sampleRate = 44100;
     final int samplesPerNote = ((sampleRate * noteDurationMs) / 1000).round();
     final int totalNotes = frequencies.length * loops;
     final int totalSamples = samplesPerNote * totalNotes;
-    final int dataSize = totalSamples * 2; // 16-bit mono
+    const int numChannels = 2; // Stereo
+    const int blockAlign = numChannels * 2;
+    const int byteRate = sampleRate * blockAlign;
+    final int dataSize = totalSamples * blockAlign;
     final int fileSize = 44 + dataSize;
 
     final ByteData buffer = ByteData(fileSize);
 
-    // RIFF Header
     _writeString(buffer, 0, 'RIFF');
     buffer.setUint32(4, fileSize - 8, Endian.little);
     _writeString(buffer, 8, 'WAVE');
 
-    // fmt subchunk
     _writeString(buffer, 12, 'fmt ');
-    buffer.setUint32(16, 16, Endian.little); // Subchunk1Size (16 for PCM)
-    buffer.setUint16(20, 1, Endian.little); // AudioFormat (1 = PCM)
-    buffer.setUint16(22, 1, Endian.little); // NumChannels (1 = mono)
+    buffer.setUint32(16, 16, Endian.little);
+    buffer.setUint16(20, 1, Endian.little);
+    buffer.setUint16(22, numChannels, Endian.little);
     buffer.setUint32(24, sampleRate, Endian.little);
-    buffer.setUint32(28, sampleRate * 2, Endian.little); // ByteRate
-    buffer.setUint16(32, 2, Endian.little); // BlockAlign
-    buffer.setUint16(34, 16, Endian.little); // BitsPerSample
+    buffer.setUint32(28, byteRate, Endian.little);
+    buffer.setUint16(32, blockAlign, Endian.little);
+    buffer.setUint16(34, 16, Endian.little);
 
-    // data subchunk
     _writeString(buffer, 36, 'data');
     buffer.setUint32(40, dataSize, Endian.little);
 
@@ -61,26 +99,26 @@ class SoundGeneratorService {
           final double t = i / sampleRate;
           final double progress = i / samplesPerNote;
 
-          // Smooth attack & decay envelope for warm bell/synth tone
           double envelope = 1.0;
-          if (progress < 0.08) {
-            envelope = progress / 0.08;
-          } else if (progress > 0.72) {
-            envelope = (1.0 - progress) / 0.28;
+          if (progress < 0.06) {
+            envelope = progress / 0.06;
+          } else if (progress > 0.74) {
+            envelope = (1.0 - progress) / 0.26;
           }
 
-          // Fundamental + octave + fifth overtone for rich harmonic sound
-          final double wave1 = math.sin(2 * math.pi * freq * t);
-          final double wave2 = 0.35 * math.sin(2 * math.pi * (freq * 2.0) * t);
-          final double wave3 = 0.15 * math.sin(2 * math.pi * (freq * 1.5) * t);
+          final double w1 = math.sin(2 * math.pi * freq * t);
+          final double w2 = 0.40 * math.sin(2 * math.pi * (freq * 2.0) * t);
+          final double w3 = 0.20 * math.sin(2 * math.pi * (freq * 1.5) * t);
+          final double w4 = 0.12 * math.sin(2 * math.pi * (freq * 3.0) * t);
 
           final double combined =
-              ((wave1 + wave2 + wave3) / 1.5) * envelope * volume;
+              ((w1 + w2 + w3 + w4) / 1.72) * envelope * volume;
           final int sample =
               (combined * 32767).round().clamp(-32768, 32767);
 
           buffer.setInt16(offset, sample, Endian.little);
-          offset += 2;
+          buffer.setInt16(offset + 2, sample, Endian.little);
+          offset += 4;
         }
       }
     }
@@ -96,10 +134,12 @@ class SoundGeneratorService {
 
   Future<void> playRingtone(RingtoneItem ringtone, {bool loop = false}) async {
     try {
+      await _ensureAudioContext();
       await stopRingtone();
       _isPlaying = true;
       _currentRingtoneId = ringtone.id;
 
+      await _alarmPlayer.setVolume(1.0);
       await _alarmPlayer.setReleaseMode(
         loop ? ReleaseMode.loop : ReleaseMode.stop,
       );
@@ -108,13 +148,25 @@ class SoundGeneratorService {
           ringtone.customFilePath != null &&
           ringtone.customFilePath!.isNotEmpty) {
         await _alarmPlayer.play(DeviceFileSource(ringtone.customFilePath!));
+      } else if (_builtInAssetIds.contains(ringtone.id)) {
+        await _alarmPlayer.play(AssetSource('sounds/${ringtone.id}.wav'));
       } else {
         final wavBytes = generateMelodyWav(
           frequencies: ringtone.melodyFrequencies,
           noteDurationMs: ringtone.noteDurationMs,
           loops: loop ? 4 : 2,
         );
-        await _alarmPlayer.play(BytesSource(wavBytes));
+        if (kIsWeb) {
+          await _alarmPlayer.play(
+            BytesSource(wavBytes, mimeType: 'audio/wav'),
+          );
+        } else {
+          final tempFile = File(
+            '${Directory.systemTemp.path}/samy_tone_${ringtone.id.replaceAll(RegExp(r'[^a-zA-Z0-9_]'), '')}.wav',
+          );
+          await tempFile.writeAsBytes(wavBytes, flush: true);
+          await _alarmPlayer.play(DeviceFileSource(tempFile.path));
+        }
       }
 
       HapticFeedback.mediumImpact();
@@ -130,6 +182,7 @@ class SoundGeneratorService {
     } catch (_) {
       _isPlaying = false;
       _currentRingtoneId = null;
+      SystemSound.play(SystemSoundType.alert);
     }
   }
 
@@ -141,31 +194,32 @@ class SoundGeneratorService {
     } catch (_) {}
   }
 
+  Future<void> playStartupChime() async {
+    try {
+      await _ensureAudioContext();
+      await _fxPlayer.stop();
+      await _fxPlayer.setVolume(0.9);
+      await _fxPlayer.play(AssetSource('sounds/samy_startup.wav'));
+    } catch (_) {}
+  }
+
   Future<void> playSuccessChime() async {
     try {
+      await _ensureAudioContext();
       HapticFeedback.heavyImpact();
-      final bytes = generateMelodyWav(
-        frequencies: const [523.25, 659.25, 783.99, 1046.50],
-        noteDurationMs: 110,
-        loops: 1,
-        volume: 0.75,
-      );
       await _fxPlayer.stop();
-      await _fxPlayer.play(BytesSource(bytes));
+      await _fxPlayer.setVolume(1.0);
+      await _fxPlayer.play(AssetSource('sounds/samy_success.wav'));
     } catch (_) {}
   }
 
   Future<void> playErrorBuzz() async {
     try {
+      await _ensureAudioContext();
       HapticFeedback.vibrate();
-      final bytes = generateMelodyWav(
-        frequencies: const [220.0, 185.0],
-        noteDurationMs: 140,
-        loops: 1,
-        volume: 0.8,
-      );
       await _fxPlayer.stop();
-      await _fxPlayer.play(BytesSource(bytes));
+      await _fxPlayer.setVolume(1.0);
+      await _fxPlayer.play(AssetSource('sounds/samy_error.wav'));
     } catch (_) {}
   }
 }

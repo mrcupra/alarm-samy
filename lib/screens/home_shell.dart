@@ -3,6 +3,7 @@ import '../services/app_state.dart';
 import '../theme/app_theme.dart';
 import 'alarm_ringing_screen.dart';
 import 'alarms_tab.dart';
+import 'epic_splash_screen.dart';
 import 'live_clock_tab.dart';
 import 'pro_paywall_screen.dart';
 import 'reminders_tab.dart';
@@ -19,6 +20,7 @@ class HomeShell extends StatefulWidget {
 
 class _HomeShellState extends State<HomeShell> {
   int _currentIndex = 0;
+  bool _showSplashIntro = true;
 
   void _goToProTab() {
     setState(() {
@@ -28,7 +30,18 @@ class _HomeShellState extends State<HomeShell> {
 
   @override
   Widget build(BuildContext context) {
-    // If an alarm is actively ringing, show the full-screen interactive challenge!
+    // 1. Show Epic Animated Splash & Intro Screen on launch
+    if (_showSplashIntro) {
+      return EpicSplashScreen(
+        onFinish: () {
+          setState(() {
+            _showSplashIntro = false;
+          });
+        },
+      );
+    }
+
+    // 2. If an alarm is actively ringing, show the full-screen interactive challenge!
     if (widget.appState.activeRingingAlarm != null) {
       return AlarmRingingScreen(
         alarm: widget.appState.activeRingingAlarm!,
@@ -69,90 +82,117 @@ class _HomeShellState extends State<HomeShell> {
           bottom: false,
           child: Column(
             children: [
-              // Custom Top App Header
+              // Custom Top App Header with 3D Logo
               Padding(
                 padding:
                     const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
                 child: Row(
                   children: [
-                    Container(
-                      width: 42,
-                      height: 42,
-                      decoration: BoxDecoration(
-                        gradient: SamyColors.primaryGradient(isDark),
-                        borderRadius: BorderRadius.circular(14),
-                        boxShadow: [
-                          BoxShadow(
+                    GestureDetector(
+                      onTap: () {
+                        setState(() => _showSplashIntro = true);
+                      },
+                      child: Container(
+                        width: 46,
+                        height: 46,
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(
                             color:
-                                SamyColors.primaryBlue.withValues(alpha: 0.35),
-                            blurRadius: 12,
+                                SamyColors.electricCyan.withValues(alpha: 0.7),
+                            width: 1.5,
                           ),
-                        ],
-                      ),
-                      child: const Icon(
-                        Icons.alarm_rounded,
-                        color: Colors.white,
-                        size: 24,
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            Text(
-                              'Alarm Samy',
-                              style: TextStyle(
-                                fontSize: 19,
-                                fontWeight: FontWeight.w900,
-                                color: isDark
-                                    ? Colors.white
-                                    : SamyColors.lightTextPrimary,
-                              ),
-                            ),
-                            const SizedBox(width: 6),
-                            GestureDetector(
-                              onTap: _goToProTab,
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 8, vertical: 2),
-                                decoration: BoxDecoration(
-                                  gradient: isPro
-                                      ? const LinearGradient(
-                                          colors: [
-                                            Color(0xFFFFB800),
-                                            Color(0xFFFF8800),
-                                          ],
-                                        )
-                                      : SamyColors.primaryGradient(isDark),
-                                  borderRadius: BorderRadius.circular(10),
-                                ),
-                                child: Text(
-                                  isPro ? 'PRO 👑' : 'مجاني',
-                                  style: const TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 10,
-                                    fontWeight: FontWeight.w900,
-                                  ),
-                                ),
-                              ),
+                          boxShadow: [
+                            BoxShadow(
+                              color: SamyColors.primaryBlue
+                                  .withValues(alpha: 0.45),
+                              blurRadius: 14,
                             ),
                           ],
                         ),
-                        Text(
-                          'منبه سامي الذكي • تحديات الاستيقاظ والتذكيرات',
-                          style: TextStyle(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w600,
-                            color: isDark
-                                ? SamyColors.darkTextSecondary
-                                : SamyColors.lightTextSecondary,
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(12),
+                          child: Image.asset(
+                            'assets/images/logo.png',
+                            fit: BoxFit.cover,
+                            errorBuilder: (_, __, ___) => Container(
+                              decoration: BoxDecoration(
+                                gradient: SamyColors.primaryGradient(isDark),
+                              ),
+                              child: const Icon(
+                                Icons.alarm_rounded,
+                                color: Colors.white,
+                                size: 24,
+                              ),
+                            ),
                           ),
                         ),
-                      ],
+                      ),
                     ),
-                    const Spacer(),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Flexible(
+                                child: Text(
+                                  'Alarm Samy',
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontSize: 19,
+                                    fontWeight: FontWeight.w900,
+                                    color: isDark
+                                        ? Colors.white
+                                        : SamyColors.lightTextPrimary,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 6),
+                              GestureDetector(
+                                onTap: _goToProTab,
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 8, vertical: 2),
+                                  decoration: BoxDecoration(
+                                    gradient: isPro
+                                        ? const LinearGradient(
+                                            colors: [
+                                              Color(0xFFFFB800),
+                                              Color(0xFFFF8800),
+                                            ],
+                                          )
+                                        : SamyColors.primaryGradient(isDark),
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
+                                  child: Text(
+                                    isPro ? 'PRO 👑' : 'مجاني',
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.w900,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          Text(
+                            'منبه سامي الذكي • اضغط على اللوجو لعرض الانترو',
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
+                              color: isDark
+                                  ? SamyColors.darkTextSecondary
+                                  : SamyColors.lightTextSecondary,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 8),
                     // Theme Switcher Button (Blue/White vs Dark Royal Blue)
                     InkWell(
                       borderRadius: BorderRadius.circular(14),

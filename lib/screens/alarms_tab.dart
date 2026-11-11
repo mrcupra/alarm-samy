@@ -435,7 +435,7 @@ class _AlarmEditorSheetState extends State<_AlarmEditorSheet> {
     _challengeType = e?.challengeType ?? WakeChallengeType.math;
     _difficulty = e?.difficulty ?? ChallengeDifficulty.medium;
     _questionCount = e?.questionCount ?? 3;
-    _ringtoneId = e?.ringtoneId ?? 'samy_dawn';
+    _ringtoneId = e?.ringtoneId ?? 'samy_masry';
     _wakeUpCheck = e?.wakeUpCheck ?? false;
     _gradualVolume = e?.gradualVolume ?? false;
   }

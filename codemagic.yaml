@@ -21,8 +21,9 @@ workflows:
       - name: Build iOS Release (No Codesign)
         script: |
           flutter build ios --release --no-codesign
-      - name: Package Runner.app into Alarm_Samy.ipa
+      - name: Bundle Lock Screen Notification Sound & Package Alarm_Samy.ipa
         script: |
+          afconvert assets/sounds/samy_masry.mp3 build/ios/iphoneos/Runner.app/samy_masry.caf -d ima4 -f caff || true
           cd build/ios/iphoneos
           mkdir -p Payload
           cp -r Runner.app Payload/

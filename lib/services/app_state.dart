@@ -23,6 +23,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   Timer? _clockTimer;
   Timer? _backgroundTestTimer;
   int _backgroundTestCountdown = 0;
+  int _ringingElapsedSeconds = 0;
   DateTime _now = DateTime.now();
 
   bool get isDarkMode => _isDarkMode;
@@ -39,6 +40,15 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   List<ReminderItem> get reminders => List.unmodifiable(_reminders);
 
   static const List<RingtoneItem> defaultRingtones = [
+    RingtoneItem(
+      id: 'samy_masry',
+      name: 'قوم يا مصري 🇪🇬🔥 (نغمة سامي الخاصة)',
+      subtitle: 'النغمة المرفوعة الخاصة بك • صوت قوي ومتواصل لإيقاظ فوري',
+      category: 'مرفوع خاص 🔥',
+      isPro: false,
+      melodyFrequencies: [523.25, 659.25, 783.99, 1046.50],
+      noteDurationMs: 200,
+    ),
     RingtoneItem(
       id: 'samy_dawn',
       name: 'نبض الفجر الأزرق (Samy Dawn)',
@@ -141,8 +151,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     _proPlanTitle = prefs.getString('samy_pro_plan') ?? 'النسخة المجانية';
     _wakeStreakDays = prefs.getInt('samy_streak') ?? 7;
     _completedChallengesCount = prefs.getInt('samy_challenges_solved') ?? 24;
-    _backgroundGuardianEnabled =
-        prefs.getBool('samy_bg_guardian') ?? true;
+    _backgroundGuardianEnabled = prefs.getBool('samy_bg_guardian') ?? true;
 
     // Load alarms
     final alarmsJson = prefs.getStringList('samy_alarms');
@@ -162,7 +171,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
           challengeType: WakeChallengeType.math,
           difficulty: ChallengeDifficulty.medium,
           questionCount: 3,
-          ringtoneId: 'samy_dawn',
+          ringtoneId: 'samy_masry',
         ),
         const AlarmItem(
           id: 'default_2',
@@ -174,7 +183,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
           challengeType: WakeChallengeType.burstTap,
           difficulty: ChallengeDifficulty.easy,
           questionCount: 2,
-          ringtoneId: 'samy_radar',
+          ringtoneId: 'samy_masry',
         ),
         const AlarmItem(
           id: 'default_3',
@@ -261,8 +270,9 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.paused ||
-        state == AppLifecycleState.inactive) {
-      // Ensure background audio keep-alive and OS notifications are armed when leaving app
+        state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.hidden) {
+      // Ensure background audio keep-alive and OS notifications stay locked-in when locking screen
       _syncBackgroundServices();
     } else if (state == AppLifecycleState.resumed) {
       _now = DateTime.now();
@@ -272,8 +282,8 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   Future<void> _syncBackgroundServices() async {
-    final hasActiveAlarms =
-        _backgroundGuardianEnabled && _alarms.any((a) => a.isEnabled);
+    final hasActiveAlarms = _activeRingingAlarm != null ||
+        (_backgroundGuardianEnabled && _alarms.any((a) => a.isEnabled));
     await SoundGeneratorService().syncBackgroundKeepAlive(hasActiveAlarms);
     await NotificationService().syncScheduledAlarms(_alarms);
   }
@@ -286,7 +296,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     await _syncBackgroundServices();
   }
 
-  /// Starts a 10-second countdown so the user can exit/minimize the app and test background ringing!
+  /// Starts a 10-second countdown so the user can lock the screen / exit the app and test continuous ringing!
   void startTenSecondBackgroundTest() {
     _backgroundTestTimer?.cancel();
     _backgroundTestCountdown = 10;
@@ -301,18 +311,16 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
       } else {
         timer.cancel();
         _backgroundTestCountdown = 0;
-        final testAlarm = _alarms.isNotEmpty
-            ? _alarms.first
-            : const AlarmItem(
-                id: 'bg_test_alarm',
-                hour: 7,
-                minute: 0,
-                label: 'اختبار الرنين في الخلفية بنجاح 🚀',
-                challengeType: WakeChallengeType.math,
-                difficulty: ChallengeDifficulty.medium,
-                questionCount: 2,
-                ringtoneId: 'samy_thunder',
-              );
+        const testAlarm = AlarmItem(
+          id: 'bg_test_alarm',
+          hour: 7,
+          minute: 0,
+          label: 'قوم يا مصري 🇪🇬🔥 (اختبار شاشة القفل والخلفية)',
+          challengeType: WakeChallengeType.math,
+          difficulty: ChallengeDifficulty.medium,
+          questionCount: 2,
+          ringtoneId: 'samy_masry',
+        );
         triggerAlarmNow(testAlarm);
       }
     });
@@ -329,6 +337,20 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     _clockTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       _now = DateTime.now();
       _checkScheduledAlarms();
+
+      // If an alarm is actively ringing while screen is locked, keep enforcing continuous loop & notifications
+      if (_activeRingingAlarm != null) {
+        _ringingElapsedSeconds++;
+        if (!SoundGeneratorService().isPlaying) {
+          final ringtone = getRingtoneById(_activeRingingAlarm!.ringtoneId);
+          SoundGeneratorService().playRingtone(ringtone, loop: true);
+        }
+        if (_ringingElapsedSeconds % 14 == 0) {
+          NotificationService()
+              .showAlarmRingingNotification(_activeRingingAlarm!);
+        }
+      }
+
       notifyListeners();
     });
   }
@@ -338,7 +360,6 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     final minuteKey =
         '${_now.year}-${_now.month}-${_now.day}-${_now.hour}:${_now.minute}';
 
-    // Check across the entire minute (0..59s) so background timer coalescing never misses!
     for (final alarm in _alarms) {
       if (alarm.isEnabled &&
           alarm.hour == _now.hour &&
@@ -385,7 +406,6 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     } else {
       _alarms.insert(0, alarm);
     }
-    // Clear any previous trigger lock for this alarm ID so newly edited time can ring immediately
     _triggeredAlarmMinuteMap.remove(alarm.id);
     notifyListeners();
     await _saveAlarms();
@@ -423,7 +443,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
       challengeType: WakeChallengeType.burstTap,
       difficulty: ChallengeDifficulty.easy,
       questionCount: 1,
-      ringtoneId: 'samy_dawn',
+      ringtoneId: 'samy_masry',
     );
     _alarms.insert(0, napAlarm);
     notifyListeners();
@@ -433,6 +453,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
 
   void triggerAlarmNow(AlarmItem alarm) {
     _activeRingingAlarm = alarm;
+    _ringingElapsedSeconds = 0;
     final ringtone = getRingtoneById(alarm.ringtoneId);
     SoundGeneratorService().playRingtone(ringtone, loop: true);
     NotificationService().showAlarmRingingNotification(alarm);
@@ -441,8 +462,10 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
 
   Future<void> completeActiveAlarmChallenge() async {
     await SoundGeneratorService().stopRingtone();
+    await NotificationService().cancelAllActiveNotifications();
     await SoundGeneratorService().playSuccessChime();
     _activeRingingAlarm = null;
+    _ringingElapsedSeconds = 0;
     _completedChallengesCount += 1;
     notifyListeners();
     final prefs = await SharedPreferences.getInstance();
@@ -453,7 +476,9 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   Future<void> snoozeActiveAlarm() async {
     final current = _activeRingingAlarm;
     await SoundGeneratorService().stopRingtone();
+    await NotificationService().cancelAllActiveNotifications();
     _activeRingingAlarm = null;
+    _ringingElapsedSeconds = 0;
     if (current != null) {
       final snoozedTime =
           DateTime.now().add(Duration(minutes: current.snoozeMinutes));

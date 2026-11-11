@@ -53,7 +53,6 @@ class NotificationService {
           )
           .timeout(const Duration(milliseconds: 600));
 
-      // Explicitly request iOS & Android 13+ permissions
       if (!kIsWeb) {
         final iosImpl = _plugin.resolvePlatformSpecificImplementation<
             IOSFlutterLocalNotificationsPlugin>();
@@ -76,20 +75,20 @@ class NotificationService {
             .timeout(const Duration(milliseconds: 600));
       }
       _initialized = true;
-    } catch (_) {
-      // Gracefully ignore on unsupported desktop test runners
-    }
+    } catch (_) {}
   }
 
   NotificationDetails _alarmNotificationDetails() {
     const androidDetails = AndroidNotificationDetails(
-      'alarm_samy_critical_channel',
-      'منبهات سامي الذكية (صوت عالي)',
-      channelDescription: 'إشعارات رنين المنبه في الخلفية وعلى شاشة القفل',
+      'alarm_samy_critical_channel_v2',
+      'منبهات سامي الذكية (رنين متواصل)',
+      channelDescription: 'إشعارات رنين المنبه المتواصل في الخلفية وشاشة القفل',
       importance: Importance.max,
       priority: Priority.max,
       fullScreenIntent: true,
       playSound: true,
+      ongoing: true,
+      autoCancel: false,
       enableVibration: true,
       category: AndroidNotificationCategory.alarm,
       visibility: NotificationVisibility.public,
@@ -101,6 +100,7 @@ class NotificationService {
       presentSound: true,
       presentBanner: true,
       presentList: true,
+      sound: 'samy_masry.caf',
       interruptionLevel: InterruptionLevel.timeSensitive,
     );
 
@@ -111,21 +111,28 @@ class NotificationService {
     );
   }
 
-  /// Fires an immediate notification when the alarm triggers while the user is outside the app
+  /// Fires an immediate notification when the alarm triggers while the user is outside the app or screen is locked
   Future<void> showAlarmRingingNotification(AlarmItem alarm) async {
     if (!_initialized) return;
     try {
       await _plugin.show(
-        alarm.id.hashCode.abs() % 100000,
+        alarm.id.hashCode.abs() % 90000,
         '🚨 منبه سامي يرن الآن: ${alarm.label}',
-        'ادخل للتطبيق وحل تحدي (${alarm.challengeType.arabicTitle}) لإيقاف صوت المنبه!',
+        'افتح التطبيق وحل تحدي (${alarm.challengeType.arabicTitle}) لإيقاف الرنين المتواصل!',
         _alarmNotificationDetails(),
         payload: alarm.id,
       );
     } catch (_) {}
   }
 
-  /// Syncs all enabled alarms with the OS native notification scheduler
+  Future<void> cancelAllActiveNotifications() async {
+    if (!_initialized) return;
+    try {
+      await _plugin.cancelAll();
+    } catch (_) {}
+  }
+
+  /// Syncs all enabled alarms with the OS native notification scheduler, including a repeating burst for Lock Screen
   Future<void> syncScheduledAlarms(List<AlarmItem> alarms) async {
     if (!_initialized) return;
     try {
@@ -146,20 +153,30 @@ class NotificationService {
           scheduled = scheduled.add(const Duration(days: 1));
         }
 
-        final tzScheduled = tz.TZDateTime.from(scheduled, tz.local);
+        final baseId = (alarm.id.hashCode.abs() % 10000) * 10;
 
-        await _plugin.zonedSchedule(
-          alarm.id.hashCode.abs() % 100000,
-          '⏰ حان موعد المنبه: ${alarm.label}',
-          'اضغط لفتح تحدي (${alarm.challengeType.arabicTitle}) وإيقاف الرنين',
-          tzScheduled,
-          _alarmNotificationDetails(),
-          androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
-          uiLocalNotificationDateInterpretation:
-              UILocalNotificationDateInterpretation.absoluteTime,
-          matchDateTimeComponents: DateTimeComponents.time,
-          payload: alarm.id,
-        );
+        // Schedule a burst of 5 consecutive lock-screen notifications (at +0s, +12s, +24s, +36s, +48s)
+        // so even if the app was force-closed, the Lock Screen keeps ringing continuously!
+        for (int burst = 0; burst < 5; burst++) {
+          final burstTime = scheduled.add(Duration(seconds: burst * 12));
+          final tzScheduled = tz.TZDateTime.from(burstTime, tz.local);
+
+          await _plugin.zonedSchedule(
+            baseId + burst,
+            burst == 0
+                ? '⏰ حان موعد المنبه: ${alarm.label}'
+                : '🚨 ما زال المنبه يرن! (${alarm.label})',
+            'اضغط لفتح التطبيق وحل تحدي (${alarm.challengeType.arabicTitle}) لإيقاف الصوت',
+            tzScheduled,
+            _alarmNotificationDetails(),
+            androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+            uiLocalNotificationDateInterpretation:
+                UILocalNotificationDateInterpretation.absoluteTime,
+            matchDateTimeComponents:
+                burst == 0 ? DateTimeComponents.time : null,
+            payload: alarm.id,
+          );
+        }
       }
     } catch (_) {}
   }

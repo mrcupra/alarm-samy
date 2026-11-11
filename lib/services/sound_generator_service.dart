@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
 import 'package:audioplayers/audioplayers.dart';
@@ -16,21 +17,26 @@ class SoundGeneratorService {
   final AudioPlayer _keepAlivePlayer = AudioPlayer();
 
   bool _isPlaying = false;
+  bool _isLoopingAlarm = false;
   bool _isKeepAliveActive = false;
   String? _currentRingtoneId;
+  RingtoneItem? _currentRingtoneItem;
   bool _contextInitialized = false;
+  StreamSubscription<void>? _alarmCompleteSub;
+  StreamSubscription<void>? _keepAliveCompleteSub;
 
   bool get isPlaying => _isPlaying;
   bool get isKeepAliveActive => _isKeepAliveActive;
   String? get currentRingtoneId => _currentRingtoneId;
 
-  static const Set<String> _builtInAssetIds = {
-    'samy_dawn',
-    'samy_chime',
-    'samy_radar',
-    'samy_thunder',
-    'samy_royal',
-    'samy_cyber',
+  static const Map<String, String> _builtInAssetFiles = {
+    'samy_masry': 'sounds/samy_masry.mp3',
+    'samy_dawn': 'sounds/samy_dawn.wav',
+    'samy_chime': 'sounds/samy_chime.wav',
+    'samy_radar': 'sounds/samy_radar.wav',
+    'samy_thunder': 'sounds/samy_thunder.wav',
+    'samy_royal': 'sounds/samy_royal.wav',
+    'samy_cyber': 'sounds/samy_cyber.wav',
   };
 
   Future<void> _ensureAudioContext() async {
@@ -45,6 +51,7 @@ class SoundGeneratorService {
                 options: const {
                   AVAudioSessionOptions.mixWithOthers,
                   AVAudioSessionOptions.defaultToSpeaker,
+                  AVAudioSessionOptions.allowBluetooth,
                 },
               ),
               android: const AudioContextAndroid(
@@ -63,10 +70,28 @@ class SoundGeneratorService {
       await _fxPlayer
           .setVolume(1.0)
           .timeout(const Duration(milliseconds: 300));
+
+      // Backup continuous loop listener in case OS lock screen ends a track
+      _alarmCompleteSub?.cancel();
+      _alarmCompleteSub = _alarmPlayer.onPlayerComplete.listen((_) {
+        if (_isPlaying && _isLoopingAlarm && _currentRingtoneItem != null) {
+          _startAlarmSource(_currentRingtoneItem!, loop: true);
+        } else if (!_isLoopingAlarm) {
+          _isPlaying = false;
+          _currentRingtoneId = null;
+        }
+      });
+
+      _keepAliveCompleteSub?.cancel();
+      _keepAliveCompleteSub = _keepAlivePlayer.onPlayerComplete.listen((_) {
+        if (_isKeepAliveActive) {
+          _keepAlivePlayer.play(AssetSource('sounds/samy_keepalive.wav'));
+        }
+      });
     } catch (_) {}
   }
 
-  /// Keeps the app process alive in background on iOS & Desktop when alarms are armed
+  /// Keeps the app process and iOS Lock Screen audio session alive continuously when alarms are armed
   Future<void> syncBackgroundKeepAlive(bool shouldStayAwake) async {
     try {
       await _ensureAudioContext();
@@ -81,7 +106,7 @@ class SoundGeneratorService {
         await _keepAlivePlayer
             .play(AssetSource('sounds/samy_keepalive.wav'))
             .timeout(const Duration(milliseconds: 500));
-      } else if (!shouldStayAwake && _isKeepAliveActive) {
+      } else if (!shouldStayAwake && _isKeepAliveActive && !_isLoopingAlarm) {
         _isKeepAliveActive = false;
         await _keepAlivePlayer
             .stop()
@@ -122,7 +147,7 @@ class SoundGeneratorService {
     buffer.setUint16(32, blockAlign, Endian.little);
     buffer.setUint16(34, 16, Endian.little);
 
-    _writeString(36 == 36 ? buffer : buffer, 36, 'data');
+    _writeString(buffer, 36, 'data');
     buffer.setUint32(40, dataSize, Endian.little);
 
     int offset = 44;
@@ -166,55 +191,56 @@ class SoundGeneratorService {
     }
   }
 
+  Future<void> _startAlarmSource(
+    RingtoneItem ringtone, {
+    required bool loop,
+  }) async {
+    await _alarmPlayer.setVolume(1.0);
+    await _alarmPlayer.setReleaseMode(
+      loop ? ReleaseMode.loop : ReleaseMode.stop,
+    );
+
+    if (ringtone.isCustom &&
+        ringtone.customFilePath != null &&
+        ringtone.customFilePath!.isNotEmpty) {
+      await _alarmPlayer.play(DeviceFileSource(ringtone.customFilePath!));
+    } else if (_builtInAssetFiles.containsKey(ringtone.id)) {
+      await _alarmPlayer.play(AssetSource(_builtInAssetFiles[ringtone.id]!));
+    } else {
+      final wavBytes = generateMelodyWav(
+        frequencies: ringtone.melodyFrequencies,
+        noteDurationMs: ringtone.noteDurationMs,
+        loops: loop ? 4 : 2,
+      );
+      if (kIsWeb) {
+        await _alarmPlayer.play(
+          BytesSource(wavBytes, mimeType: 'audio/wav'),
+        );
+      } else {
+        final tempFile = File(
+          '${Directory.systemTemp.path}/samy_tone_${ringtone.id.replaceAll(RegExp(r'[^a-zA-Z0-9_]'), '')}.wav',
+        );
+        await tempFile.writeAsBytes(wavBytes, flush: true);
+        await _alarmPlayer.play(DeviceFileSource(tempFile.path));
+      }
+    }
+  }
+
   Future<void> playRingtone(RingtoneItem ringtone, {bool loop = false}) async {
     try {
       await _ensureAudioContext();
-      await stopRingtone();
+      // Note: Do NOT stop _keepAlivePlayer so iOS Lock Screen audio session never drops!
+      await _alarmPlayer.stop();
       _isPlaying = true;
+      _isLoopingAlarm = loop;
       _currentRingtoneId = ringtone.id;
+      _currentRingtoneItem = ringtone;
 
-      await _alarmPlayer.setVolume(1.0);
-      await _alarmPlayer.setReleaseMode(
-        loop ? ReleaseMode.loop : ReleaseMode.stop,
-      );
-
-      if (ringtone.isCustom &&
-          ringtone.customFilePath != null &&
-          ringtone.customFilePath!.isNotEmpty) {
-        await _alarmPlayer.play(DeviceFileSource(ringtone.customFilePath!));
-      } else if (_builtInAssetIds.contains(ringtone.id)) {
-        await _alarmPlayer.play(AssetSource('sounds/${ringtone.id}.wav'));
-      } else {
-        final wavBytes = generateMelodyWav(
-          frequencies: ringtone.melodyFrequencies,
-          noteDurationMs: ringtone.noteDurationMs,
-          loops: loop ? 4 : 2,
-        );
-        if (kIsWeb) {
-          await _alarmPlayer.play(
-            BytesSource(wavBytes, mimeType: 'audio/wav'),
-          );
-        } else {
-          final tempFile = File(
-            '${Directory.systemTemp.path}/samy_tone_${ringtone.id.replaceAll(RegExp(r'[^a-zA-Z0-9_]'), '')}.wav',
-          );
-          await tempFile.writeAsBytes(wavBytes, flush: true);
-          await _alarmPlayer.play(DeviceFileSource(tempFile.path));
-        }
-      }
-
-      HapticFeedback.mediumImpact();
-
-      if (!loop) {
-        _alarmPlayer.onPlayerComplete.first.then((_) {
-          if (_currentRingtoneId == ringtone.id) {
-            _isPlaying = false;
-            _currentRingtoneId = null;
-          }
-        });
-      }
+      await _startAlarmSource(ringtone, loop: loop);
+      HapticFeedback.heavyImpact();
     } catch (_) {
       _isPlaying = false;
+      _isLoopingAlarm = false;
       _currentRingtoneId = null;
       SystemSound.play(SystemSoundType.alert);
     }
@@ -223,7 +249,9 @@ class SoundGeneratorService {
   Future<void> stopRingtone() async {
     try {
       _isPlaying = false;
+      _isLoopingAlarm = false;
       _currentRingtoneId = null;
+      _currentRingtoneItem = null;
       await _alarmPlayer.stop();
     } catch (_) {}
   }

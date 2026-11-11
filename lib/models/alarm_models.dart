@@ -191,7 +191,7 @@ class AlarmItem {
     this.challengeType = WakeChallengeType.math,
     this.difficulty = ChallengeDifficulty.medium,
     this.questionCount = 3,
-    this.ringtoneId = 'samy_dawn',
+    this.ringtoneId = 'samy_masry',
     this.snoozeMinutes = 5,
     this.wakeUpCheck = false,
     this.gradualVolume = false,
